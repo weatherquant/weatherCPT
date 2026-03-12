@@ -1,0 +1,233 @@
+## Code Support for
+# A Prospect‑Theory Extension of the Cost-Loss Model for Weather Forecast Decision Making
+# Jason West , Bureau of Meteorology, Australia 
+# ORCID: https://orcid.org/0000-0003-3271-3155
+
+# ---- Parameters ----
+beta   <- 0.88
+lambda <- 2.25   # not used when both options lie in loss domain
+L      <- 1.0
+CL_seq <- seq(0.01, 0.8, length.out=160)
+C_over_L_vec <- c(0.05, 0.10, 0.20, 0.40)
+delta  <- 0.69   # Tversky–Kahneman loss-side weighting
+alpha_w<- 0.65   # Prelec loss-side weighting
+
+# Imperfect protection settings
+CL_fixed <- 0.20
+C <- CL_fixed * L
+Lr_frac <- seq(0, 0.9, by=0.01)
+
+# Continuous protection settings
+p_grid <- seq(0, 0.7, by=0.005)
+eff <- 0.8
+Cmax <- C # so that full protection costs C
+
+# Simulation for Value_PT
+set.seed(7)
+Tn <- 2000
+p_arr <- rbeta(Tn, 1, 3)                # skewed to small p
+E_arr <- rbinom(Tn, 1, p_arr)           # reliable forecasts
+
+# ---- Weighting functions (loss side) ----
+w_tk <- function(p, delta=0.69) {
+  p <- pmin(pmax(p, 1e-12), 1-1e-12)
+  num <- p^delta
+  den <- (p^delta + (1-p)^delta)^(1/delta)
+  num/den
+}
+
+w_prelec <- function(p, alpha_w=0.65) {
+  p <- pmin(pmax(p, 1e-12), 1-1e-12)
+  exp(-(-log(p))^alpha_w)
+}
+
+# Numeric inverse of a monotone weighting function on (0,1)
+inv_weight <- function(y, wfun, ..., lo=1e-12, hi=1-1e-12) {
+  f <- function(p) wfun(p, ...) - y
+  uniroot(f, c(lo, hi))$root
+}
+
+# p* under perfect protection (Eq. 7)
+pstar_perfect <- function(C, L, beta, delta=0.69) {
+  rPT <- (C^beta)/(L^beta)
+  inv_weight(rPT, w_tk, delta=delta)
+}
+
+# p* under imperfect protection (Eq. 10)
+pstar_imperfect <- function(C, L, Lr, beta, delta=0.69) {
+  denom <- (L^beta - (C+Lr)^beta + C^beta)
+  denom <- max(denom, 1e-12)
+  rPT <- (C^beta)/denom
+  inv_weight(rPT, w_tk, delta=delta)
+}
+
+# Continuous protection objective (loss side), Eq. (12)
+V_cpt_loss <- function(x, p, Cmax, L, beta, delta=0.69, eff=0.8) {
+  w <- w_tk(p, delta)
+  Cx <- Cmax * x
+  Lr <- L * (1 - eff * x)
+  w * (Cx + Lr)^beta + (1-w) * (Cx)^beta
+}
+
+# Optimal x*(p) by grid search (robust)
+opt_x_over_p <- function(p_vec, Cmax, L, beta, delta=0.69, eff=0.8) {
+  xs <- numeric(length(p_vec))
+  grid <- seq(0, 1, by=0.0025)
+  for (i in seq_along(p_vec)) {
+    vals <- sapply(grid, function(x) V_cpt_loss(x, p_vec[i], Cmax, L, beta, delta, eff))
+    xs[i] <- grid[which.min(vals)]
+  }
+  xs
+}
+
+# Economic value under CPT, Eqs. (14)–(15)
+L_PT_policy <- function(p_arr, E_arr, C, L, beta, policy=c('never','always','cpt_threshold','classical_threshold'), delta=0.69) {
+  policy <- match.arg(policy)
+  Cbeta <- C^beta
+  pstar <- pstar_perfect(C, L, beta, delta)
+  losses <- numeric(length(p_arr))
+  for (t in seq_along(p_arr)) {
+    p <- p_arr[t]
+    w <- w_tk(p, delta)
+    if (policy == 'never') {
+      losses[t] <- w * (L^beta)
+    } else if (policy == 'always') {
+      losses[t] <- Cbeta
+    } else if (policy == 'cpt_threshold') {
+      losses[t] <- if (p >= pstar) Cbeta else w * (L^beta)
+    } else if (policy == 'classical_threshold') {
+      losses[t] <- if (p >= C/L) Cbeta else w * (L^beta)
+    }
+  }
+  sum(losses)
+}
+
+# ---- Figure 2a: weighting functions ----
+p <- seq(1e-4, 0.9999, length.out=1000)
+linear <- p
+w_tk_vec <- w_tk(p, delta)
+w_prelec_vec <- w_prelec(p, alpha_w)
+
+plot(p, linear, type='l', lty=2, col='black', xlab='Objective probability p', ylab='Decision weight w^-(p)', main='Loss-side probability weighting')
+lines(p, w_tk_vec, col='#1f77b4', lwd=2)
+lines(p, w_prelec_vec, col='#ff7f0e', lwd=2)
+legend('topleft', legend=c('Linear w(p)=p','TK92 (δ=0.69)','Prelec (α=0.65)'), col=c('black','#1f77b4','#ff7f0e'), lty=c(2,1,1), lwd=c(1,2,2), bty='n')
+
+# ---- Figure 2b p* vs C/L for betas ----
+CL_seq <- seq(0.01, 0.8, length.out=160)
+betas <- c(1.0, 0.88, 0.70)
+pstars_list <- lapply(betas, function(b) sapply(CL_seq, function(cl) pstar_perfect(C=cl, L=1, beta=b, delta=delta)))
+
+plot(CL_seq, CL_seq, type='l', lty=2, col='black', xlab='Cost–loss ratio C/L', ylab='Trigger probability p*', main='CPT trigger vs. classical (perfect protection, TK weighting)')
+cols <- c('#1f77b4','#2ca02c','#d62728')
+for (i in seq_along(betas)) lines(CL_seq, pstars_list[[i]], col=cols[i], lwd=2)
+legend('topleft', legend=c('Classical: p*=C/L', paste0('CPT (β=', betas, ')')), col=c('black', cols), lty=c(2,1,1,1), lwd=c(1,2,2,2), bty='n')
+
+# ---- Figure 2c: imperfect protection ----
+Lr_frac <- seq(0, 0.9, by=0.01)
+Lr_values <- Lr_frac * L
+pstars_imp_b1   <- sapply(Lr_values, function(Lr) pstar_imperfect(C, L, Lr, beta=1.0, delta=delta))
+pstars_imp_b088 <- sapply(Lr_values, function(Lr) pstar_imperfect(C, L, Lr, beta=0.88, delta=delta))
+
+plot(Lr_frac, pstars_imp_b1, type='l', col='#1f77b4', lwd=2, xlab='Residual loss fraction Lr/L', ylab='Trigger probability p*', main='Imperfect protection raises p* (C/L=0.20, TK weighting)')
+lines(Lr_frac, pstars_imp_b088, col='#2ca02c', lwd=2)
+abline(h=pstar_perfect(C, L, beta=0.88, delta=delta), col='gray', lty=3)
+legend('topleft', legend=c('β=1.0','β=0.88'), col=c('#1f77b4','#2ca02c'), lty=1, lwd=2, bty='n')
+
+
+# ---- Figure 4: continuous protection (x*(p)) ----
+xs <- opt_x_over_p(p_grid, Cmax, L, beta=0.88, delta=delta, eff=eff)
+
+plot(p_grid, xs, type='l', lwd=2, col='#1f77b4', xlab='Forecast probability p', ylab='Optimal protection level x* (0–1)', main='Continuous protection under CPT (β=0.88, TK δ=0.69, eff=0.8)')
+axis(2, at=seq(0,1,0.2))
+
+# Additional figures for low-probability/high-impact regime
+beta    <- 0.88
+L       <- 1.0
+CL_seq  <- seq(0.005, 0.20, length.out=200)
+
+delta_list <- c(0.69, 0.50, 0.40)
+betas      <- c(0.88, 0.60)
+
+w_tk <- function(p, delta=0.69){
+  p <- pmin(pmax(p,1e-12),1-1e-12)
+  num <- p^delta
+  den <- (p^delta + (1-p)^delta)^(1/delta)
+  num/den
+}
+
+inv_weight <- function(y, delta=0.69){
+  f <- function(p) w_tk(p, delta) - y
+  uniroot(f, c(1e-12,1-1e-12))$root
+}
+
+pstar_perfect <- function(C_over_L, beta=0.88, delta=0.69){
+  rPT <- (C_over_L^beta)
+  inv_weight(rPT, delta)
+}
+
+pstar_imperfect <- function(C_over_L, Lr_over_L, beta=0.88, delta=0.69){
+  L <- 1.0; C <- C_over_L*L; Lr <- Lr_over_L*L
+  denom <- (L^beta - (C+Lr)^beta + C^beta); denom <- max(denom, 1e-18)
+  rPT <- (C^beta)/denom
+  inv_weight(rPT, delta)
+}
+
+# ---- Figure 3 ----
+plot(CL_seq, CL_seq, type='l', lty=2, col='black', ylim=c(0,0.8),
+     xlab='Cost–loss ratio C/L', 
+     ylab='Trigger probability p*', 
+     main='CPT trigger at the rare-event end')
+cols <- c('#1f77b4','#2ca02c','#d62728','#9467bd')
+lines(CL_seq, sapply(CL_seq, function(cl) pstar_perfect(cl, beta=0.88, delta=0.69)), col=cols[1], lwd=2)
+lines(CL_seq, sapply(CL_seq, function(cl) pstar_perfect(cl, beta=0.88, delta=0.50)), col=cols[2], lwd=2)
+lines(CL_seq, sapply(CL_seq, function(cl) pstar_perfect(cl, beta=0.60, delta=0.50)), col=cols[3], lwd=2)
+lines(CL_seq, sapply(CL_seq, function(cl) pstar_perfect(cl, beta=0.60, delta=0.40)), col=cols[4], lwd=2)
+legend('topleft', legend=c('Classical p*=C/L','CPT β=0.88, δ=0.69','CPT β=0.88, δ=0.50','CPT β=0.60, δ=0.50','CPT β=0.60, δ=0.40'), col=c('black',cols), lty=c(2,1,1,1,1), lwd=c(1,2,2,2,2), bty='n')
+
+# ---- Figure 4 ----
+CL_fixed <- 0.05
+Lr_frac  <- seq(0, 0.8, by=0.01)
+plot(Lr_frac, 
+     sapply(Lr_frac, function(fr) pstar_imperfect(CL_fixed, fr, beta=0.88, delta=0.69)), 
+     type='l', lwd=2, col='#1f77b4', ylim=c(0,0.8), 
+     xlab='Residual loss fraction Lr/L', 
+     ylab='Trigger probability p*', 
+     main=paste0('Imperfect protection at C/L=', CL_fixed))
+lines(Lr_frac, sapply(Lr_frac, function(fr) pstar_imperfect(CL_fixed, fr, beta=0.88, delta=0.50)), lwd=2, col='#2ca02c')
+lines(Lr_frac, sapply(Lr_frac, function(fr) pstar_imperfect(CL_fixed, fr, beta=0.60, delta=0.50)), lwd=2, col='#d62728')
+abline(h=pstar_perfect(CL_fixed, beta=0.88, delta=0.69), col='gray', lty=3)
+legend('topleft', legend=c('β=0.88, δ=0.69','β=0.88, δ=0.50','β=0.60, δ=0.50'), col=c('#1f77b4','#2ca02c','#d62728'), lty=1, lwd=2, bty='n')
+
+# ---- Figure 5 ----
+set.seed(9)
+Tn <- 3000
+p_arr <- rbeta(Tn, 0.35, 8.0)
+C_over_L <- 0.05; C <- C_over_L*L
+
+LPT_sum <- function(p_arr, C, L, beta, policy=c('never','always','cpt','classical'), delta=0.69){
+  policy <- match.arg(policy)
+  Cb <- C^beta
+  pstar <- inv_weight((C^beta)/(L^beta), delta)
+  tot <- 0
+  for (p in p_arr){
+    w <- w_tk(p, delta)
+    if (policy=='never') tot <- tot + w*(L^beta)
+    if (policy=='always') tot <- tot + Cb
+    if (policy=='cpt') tot <- tot + if (p>=pstar) Cb else w*(L^beta)
+    if (policy=='classical') tot <- tot + if (p>=C/L) Cb else w*(L^beta)
+  }
+  tot
+}
+
+delta <- 0.50
+LPT_cpt <- LPT_sum(p_arr, C, L, beta, 'cpt', delta)
+LPT_cls <- LPT_sum(p_arr, C, L, beta, 'classical', delta)
+LPT_nev <- LPT_sum(p_arr, C, L, beta, 'never', delta)
+LPT_alw <- LPT_sum(p_arr, C, L, beta, 'always', delta)
+LPT_ref <- min(LPT_nev, LPT_alw)
+ValuePT_cpt <- 1 - LPT_cpt/LPT_ref
+ValuePT_cls <- 1 - LPT_cls/LPT_ref
+
+barplot(c(ValuePT_cpt, ValuePT_cls), names.arg=c('CPT trigger','Classical trigger'), col=c('#4472C4','#70AD47'), ylim=c(0,0.35), ylab='Economic value (CPT)', main=paste0('Rare-events regime (C/L=', C_over_L, ', β=0.88, δ=0.50)'))
+text(x=c(0.7,1.9), y=c(ValuePT_cpt, ValuePT_cls)+0.05, labels=sprintf('%.2f', c(ValuePT_cpt, ValuePT_cls)))
