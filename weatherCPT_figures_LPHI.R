@@ -200,6 +200,68 @@ abline(h=pstar_perfect(CL_fixed, beta=0.88, delta=0.69), col='gray', lty=3)
 legend('topleft', legend=c('β=0.88, δ=0.69','β=0.88, δ=0.50','β=0.60, δ=0.50'), col=c('#1f77b4','#2ca02c','#d62728'), lty=1, lwd=2, bty='n')
 
 # ---- Figure 5 ----
+betas <- seq(0.6, 1.0, by=0.05)
+delta_vals <- c(0.4,0.5,0.6,0.7)
+
+results <- expand.grid(beta=betas, delta=delta_vals)
+results$value <- NA
+
+for (i in 1:nrow(results)){
+  b <- results$beta[i]
+  d <- results$delta[i]
+  
+  pstar <- inv_weight((C_over_L^b), d)
+  LPT_cpt <- LPT_sum(p_arr, C, L, b, 'cpt', d)
+  LPT_cls <- LPT_sum(p_arr, C, L, b, 'classical', d)
+  
+  LPT_ref <- min(LPT_sum(p_arr, C, L, b, 'never', d),
+                 LPT_sum(p_arr, C, L, b, 'always', d))
+  
+  results$value[i] <- 1 - LPT_cpt / LPT_ref
+}
+
+library(dplyr)
+
+label_data <- results %>%
+  group_by(delta) %>%
+  slice_max(beta, n=1)
+
+peak_points <- results %>%
+  group_by(delta) %>%
+  slice_max(order_by = value, n = 1, with_ties = FALSE)
+
+ggplot(results, aes(x=beta, y=value, color=factor(delta))) +
+  geom_line(linewidth = 1.0) +
+  scale_color_manual(
+    name=expression(delta),
+    values=c("#0072B2", "#D55E00", "#009E73", "#CC79A7")
+  ) +
+  geom_text(data=peak_points,
+            aes(label=paste0("δ = ", delta)),
+            hjust=0.8,
+            vjust=-0.6,
+            size=3.5,
+            show.legend=FALSE) +
+  labs(
+    title="Sensitivity of CPT Economic Value to Behavioural Parameters",
+    x="Loss curvature parameter \u03B2",
+    y="Economic value (CPT formulation)"
+  ) +
+  theme_bw(base_family="sans") +
+  theme(
+    text=element_text(size=12),
+    axis.title=element_text(size=13),
+    plot.title=element_text(size=14, face="bold"),
+    legend.position="top",
+    legend.title=element_blank(),
+    panel.grid.major=element_line(size=0.2, colour="gray85"),
+    panel.grid.minor=element_blank()
+  ) +
+  geom_hline(yintercept=ValuePT_cls, linetype="dashed", color="black",linewidth = 0.8) + 
+  annotate("text", x=0.97, y=ValuePT_cls, label="Classical (p = C/L)",
+           hjust=1, vjust=-0.5, size=4)
+
+# ---- Figure 6 ----
 set.seed(9)
 Tn <- 3000
 p_arr <- rbeta(Tn, 0.35, 8.0)
